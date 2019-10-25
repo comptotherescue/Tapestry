@@ -6,12 +6,9 @@ defmodule Tapestry.Starter do
     end
 
     def genProcesses(numNode, numRequest) do
-     
-        coverge_progress = Task.async(fn -> converge_progress(numNode*numRequest, 0) end)
-        Process.register(coverge_progress.pid, :supervisor)
-
-      
-        uniqIdlst = Enum.map(1..numNode-5, fn x ->
+        eightyPercentNodes = round(numNode*0.8)
+        twentyPercentNodes = round(numNode*0.2)
+        uniqIdlst = Enum.map(1..eightyPercentNodes, fn _x ->
             {:ok, pid} = Tapestry.Server.start_link()
             uniqId = :crypto.hash(:sha, inspect(pid)) |> Base.encode16 
             uniqId  = String.slice(uniqId,32,8) 
@@ -21,43 +18,23 @@ defmodule Tapestry.Starter do
         Enum.each(uniqIdlst, fn x -> 
         GenServer.cast(Process.whereis(String.to_atom(x)),{:updateNodes,uniqIdlst})
         end)
-
-        #adding 5 new nodes
-        newlst =  Enum.map(1..5, fn x ->
-            {:ok, pid} = Tapestry.Server.start_link()
-            uniqId = :crypto.hash(:sha, inspect(pid)) |> Base.encode16 
-            uniqId  = String.slice(uniqId,32,8) 
-            Process.register(pid, String.to_atom(uniqId))
-            uniqId 
-        end)
-        totalNodes = uniqIdlst ++ newlst
-        Enum.each(newlst, fn x -> 
-        GenServer.cast(Process.whereis(String.to_atom(x)),{:updateNodes,totalNodes})
-        end)
+        IO.puts "Calculating hop count..."
+        coverge_progress = Task.async(fn -> converge_progress(numNode*numRequest, numRequest, 0, uniqIdlst, twentyPercentNodes) end)
+        Process.register(coverge_progress.pid, :supervisor)
 
         Enum.each(uniqIdlst, fn x -> 
-        GenServer.cast(Process.whereis(String.to_atom(x)),{:updateNodes,newlst})
-        end)
-
-        Enum.each(totalNodes, fn x -> 
         GenServer.cast(Process.whereis(String.to_atom(x)),{:route,x})
         end)
-        IO.puts "hi"
+
         #numRequest times Nodes
-        Enum.each(totalNodes, fn sourceID -> 
-            Enum.each(1..numRequest, fn x->
-                # IO.inspect totalNodes
-                # IO.inspect sourceID
-                destId = uniqueDest(sourceID, totalNodes)
+        Enum.each(uniqIdlst, fn sourceID -> 
+            Enum.each(1..numRequest, fn _x->
+                destId = uniqueDest(sourceID, uniqIdlst)
                 send(Process.whereis(String.to_atom(sourceID)),{:routeAhead,destId, 0})
             end)
         end)
         Task.await(coverge_progress)
-
-        #Kill all processes
-        Enum.each(totalNodes, fn sourceID -> 
-                send(Process.whereis(String.to_atom(sourceID)),{:kill})
-        end)
+        
 
     end
 
@@ -70,26 +47,40 @@ defmodule Tapestry.Starter do
         end
     end
 
-    def converge_progress(count, max)do
+    def converge_progress(count, numRequest, max, uniqIdlst, twentyPercentNodes)do
     if count > 0 do
         receive do
             {:Converged, val} -> 
-            
+                if twentyPercentNodes > 0 do
+                {:ok, pid} = Tapestry.Server.start_link()
+                uniqId = :crypto.hash(:sha, inspect(pid)) |> Base.encode16 
+                uniqId  = String.slice(uniqId,32,8) 
+                Process.register(pid, String.to_atom(uniqId))
+                uniqIdlst = uniqIdlst ++ [uniqId]
+                #create routing table for new node
+                GenServer.cast(Process.whereis(String.to_atom(uniqId)),{:updateNodes,uniqIdlst})
+                GenServer.cast(Process.whereis(String.to_atom(uniqId)),{:route,uniqId})
+                Enum.each(uniqIdlst, fn x -> 
+                send(Process.whereis(String.to_atom(x)),{:updateRoutingTable, uniqId})
+                end)
+                Enum.each(1..numRequest, fn _x->
+                    destId = uniqueDest(uniqId, uniqIdlst)
+                    send(Process.whereis(String.to_atom(uniqId)),{:routeAhead, destId, 0})
+                end)
+            end
             if val > max do
-                IO.puts val
-                converge_progress(count-1, val)
+                converge_progress(count-1, numRequest, val, uniqIdlst, twentyPercentNodes-1)
             else
-            converge_progress(count-1, max)
+            converge_progress(count-1, numRequest, max, uniqIdlst, twentyPercentNodes-1)
             end
             # code
         end
+    else 
+    #Kill all processes
+        Enum.each(uniqIdlst, fn sourceID -> 
+                send(Process.whereis(String.to_atom(sourceID)),{:kill})
+        end)
+    IO.puts "Maximum hop count is #{max}"
     end
-    end
-    def genUniqueIds(numNode) do
-        set = MapSet.new()
-        set = Enum.map(numNode, fn x->
-                uniqId = :crypto.hash(:sha, inspect(x)) |> Base.encode16 
-                uniqId  = String.slice(uniqId,32,8)
-                end)
     end
 end

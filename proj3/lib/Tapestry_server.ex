@@ -32,6 +32,9 @@ use GenServer
                 send(Process.whereis(String.to_atom((Map.get(rtable, {i, j})))), {:routeAhead, destId, count+1})
             end
             recBlock(uniqueId, state)
+            {:updateRoutingTable, newUniqueID} ->
+                state = createRouting(self(),[newUniqueID], state)
+                recBlock(uniqueId, state)
             {:kill} ->
              Process.exit(self(), :normal)
         end
